@@ -1,0 +1,10 @@
+{
+  "appId": "krd.bim.search",
+  "appName": "BIM Search",
+  "webDir": "docs",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
