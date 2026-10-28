@@ -1,0 +1,115 @@
+name: BIM Search
+
+# Pushing a change (uploading files) builds the Android app.
+# The schedule (08:00 and 20:00 Iraq time) and "Run workflow" update the report data in Google Drive.
+on:
+  push:
+  schedule:
+    - cron: "0 5,17 * * *"
+  workflow_dispatch:
+
+jobs:
+  data:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    concurrency: bim-data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the reports and upload the pieces that changed
+        env:
+          BIM_SERVER: ${{ secrets.BIM_SERVER }}
+          BIM_JOB_KEY: ${{ secrets.BIM_JOB_KEY }}
+        run: |
+          JOB=$(find . -name bim_job.py -not -path "./.git/*" | head -1)
+          if [ -z "$JOB" ]; then echo "bim_job.py is not in the repository - upload it"; exit 1; fi
+          python "$JOB"
+
+  app:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install
+        run: npm install
+
+      - name: Create Android project
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Background downloads, reminders and notification icon
+        run: |
+          python3 - <<'PY'
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          perms = ['android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+                   'android.permission.WAKE_LOCK', 'android.permission.POST_NOTIFICATIONS',
+                   'android.permission.SCHEDULE_EXACT_ALARM', 'android.permission.RECEIVE_BOOT_COMPLETED']
+          add = ''.join('    <uses-permission android:name="%s" />\n' % x for x in perms if x not in s)
+          s = s.replace('</manifest>', add + '</manifest>')
+          svc = ('        <receiver android:name="io.capawesome.capacitorjs.plugins.foregroundservice.NotificationActionBroadcastReceiver" />\n'
+                 '        <service android:name="io.capawesome.capacitorjs.plugins.foregroundservice.AndroidForegroundService"'
+                 ' android:foregroundServiceType="dataSync" />\n')
+          if 'AndroidForegroundService' not in s:
+              s = s.replace('</application>', svc + '    </application>')
+          open(p, 'w').write(s)
+          PY
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_bim.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFFFF" android:pathData="M13,2L4,14h7l-1,8 9,-12h-7z"/>
+          </vector>
+          XML
+          grep -n "permission\|AndroidForegroundService" android/app/src/main/AndroidManifest.xml
+
+      - name: App icon
+        continue-on-error: true
+        run: npx @capacitor/assets generate --android --iconBackgroundColor '#0f6e56' --splashBackgroundColor '#0f6e56'
+
+      - name: Version number and fixed signing key (so updates install over the old app)
+        run: |
+          sed -i "s/versionCode 1$/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"1.${{ github.run_number }}\"/" android/app/build.gradle
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
+          cat >> android/app/build.gradle <<'GRADLE'
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile rootProject.file('../debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+          }
+          GRADLE
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BIM-Search-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
