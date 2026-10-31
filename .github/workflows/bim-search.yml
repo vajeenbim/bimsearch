@@ -1,11 +1,11 @@
 name: BIM Search
 
 # Pushing a change (uploading files) builds the Android app.
-# The schedule (08:00 and 20:00 Iraq time) and "Run workflow" update the report data in Google Drive.
+# The schedule (08:00, 10:00, 13:00, 16:00, 20:00 Iraq time) and "Run workflow" update the report data in Google Drive.
 on:
   push:
   schedule:
-    - cron: "0 5,17 * * *"
+    - cron: "0 5,7,10,13,17 * * *"    # 8 AM, 10 AM, 1 PM, 4 PM, 8 PM Iraq time
   workflow_dispatch:
 
 jobs:
