@@ -308,6 +308,41 @@ class Piece:
         return {"name": self.name, "part": self.part, "rows": self.rows, "size": self.size, "gz": len(data), "sha": hashlib.sha1(data).hexdigest()}
 
 
+def merge_csv(paths, out):
+    """Puts the downloads of several Styra accounts into one file. Columns are matched by name;
+    a row that is in more than one download (same Unique ID, or exactly the same row) is kept once."""
+    if len(paths) == 1:
+        os.replace(paths[0], out); return
+    heads = []
+    for p in paths:
+        with open(p, newline="", encoding="utf-8-sig", errors="replace") as fh:
+            heads.append(next(csv.reader(fh), []) or [])
+    header = []
+    for h in heads:
+        for c in h:
+            if c not in header:
+                header.append(c)
+    idc = next((c for c in header if re.fullmatch(r"unique[ _]?id", c.strip(), re.I)), None)
+    seen, kept, dup = set(), 0, 0
+    with open(out, "w", newline="", encoding="utf-8") as fo:
+        w = csv.writer(fo, lineterminator="\r\n"); w.writerow(header)
+        for p, h in zip(paths, heads):
+            pos = [h.index(c) if c in h else -1 for c in header]
+            ii = h.index(idc) if idc in h else -1
+            with open(p, newline="", encoding="utf-8-sig", errors="replace") as fh:
+                rd = csv.reader(fh); next(rd, None)
+                for row in rd:
+                    if not row or (len(row) == 1 and not row[0]):
+                        continue
+                    key = row[ii].strip() if ii >= 0 and ii < len(row) and row[ii].strip() else hashlib.sha1("\x1f".join(row).encode()).digest()
+                    if key in seen:
+                        dup += 1; continue
+                    seen.add(key)
+                    w.writerow([row[i] if 0 <= i < len(row) else "" for i in pos]); kept += 1
+            os.remove(p)
+    say(f"   together: {kept:,} rows" + (f" ({dup:,} rows were in more than one account, kept once)" if dup else ""))
+
+
 def split(fid, path, date_tests):
     pieces, done = {}, []
     with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
@@ -348,7 +383,11 @@ def main():
     reports, problems = [], []
 
     jobs = []
-    sty = Styra(cfg["styra"]["username"], cfg["styra"]["password"])
+    # one or more Styra accounts (Settings tab: Styra username / Styra username 2 ...); their rows are put together
+    accounts = cfg.get("styras") or [cfg["styra"]]
+    stys = [Styra(a["username"], a["password"]) for a in accounts if a.get("username") and a.get("password")]
+    if not stys:
+        raise SystemExit("No Styra username/password in the Settings tab")
     for rep in REPORTS:
         jobs.append(("styra:" + rep["key"], rep["name"], "styra", rep))
     for f in cfg.get("kobo", []):
@@ -361,7 +400,14 @@ def main():
         try:
             if kind == "styra":
                 csvp = os.path.join(WORK, src["key"] + ".csv")
-                sty.export(src, csvp)
+                parts = []
+                for k, sty in enumerate(stys, 1):
+                    one = os.path.join(WORK, f"{src['key']}.acc{k}.csv")
+                    if len(stys) > 1:
+                        say(f"   account {k}: {sty.user}")
+                    sty.export(src, one)
+                    parts.append(one)
+                merge_csv(parts, csvp)
                 fid = "styra-" + src["key"]
                 header, chunks = split(fid, csvp, src.get("date"))
             else:
