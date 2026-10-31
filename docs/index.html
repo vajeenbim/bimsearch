@@ -151,7 +151,7 @@ body.site #formSearch{visibility:hidden}
 <body>
 <header>
   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
-  <div class="grow"><h1>BIM Reports</h1><div class="sub">Kobo + Styra · KML &amp; Tracker · <span id="appVer">version 21</span></div></div>
+  <div class="grow"><h1>BIM Reports</h1><div class="sub">Kobo + Styra · KML &amp; Tracker · <span id="appVer">version 22</span></div></div>
 </header>
 
 <main>
@@ -2049,9 +2049,17 @@ $("#btnShareLast").onclick = async () => {
 // =====================================================================
 const SR = { sel:new Set(), last:null, running:false };
 
+// order of reports everywhere: Styra first, then Kobo A-Z, "Disconnection of unregistered" at the very end
+function reportRank(id, name){
+  const n = String(name || "").toLowerCase();
+  if (/disconnection\s+of\s+unregist/.test(n)) return 2;
+  return String(id).startsWith("styra:") ? 0 : 1;
+}
+const reportCmp = (a, b) => reportRank(a.id, a.name) - reportRank(b.id, b.name) || String(a.name).localeCompare(String(b.name));
 function refreshSearchReports(lib){
-  const items = [...S.get().forms.filter(f => lib[f.uid]).map(f => [f.uid, f.name]),
-                 ...STYRA_REPORTS.filter(r => lib[r.id]).map(r => [r.id, "Styra · " + r.name])];
+  const items = [...STYRA_REPORTS.filter(r => lib[r.id]).map(r => ({id:r.id, name:r.name, label:"Styra · " + r.name})),
+                 ...S.get().forms.filter(f => lib[f.uid]).map(f => ({id:f.uid, name:f.name, label:f.name}))]
+                 .sort(reportCmp).map(x => [x.id, x.label]);
   const box = $("#sReports");
   for (const id of [...SR.sel]) if (id !== "*" && !lib[id]) SR.sel.delete(id);
   if (!SR.sel.size) SR.sel.add("*");
@@ -2184,7 +2192,7 @@ async function runSearch(){
   if (!q) return toast("Type something to search");
   const exact = $("#sExact").checked, hideEmpty = $("#sHideEmpty").checked;
   const files = (await DB.all()).filter(f => itemName(f.id) && (SR.sel.has("*") || SR.sel.has(f.id)))
-                                .sort((a, b) => itemName(a.id).localeCompare(itemName(b.id)));
+                                .sort((a, b) => reportCmp({id:a.id, name:itemName(a.id)}, {id:b.id, name:itemName(b.id)}));
   if (!files.length) return toast("No downloaded reports to search");
   const key = JSON.stringify([q.toLowerCase(), exact, files.map(f => [f.id, f.updated])]);
   if (SCACHE.has(key)) { SR.last = {...SCACHE.get(key), hideEmpty}; renderResults(); return; }
@@ -3728,7 +3736,7 @@ async function siteRender(){
   if (!reps.length) box.append(el("div", {class:"card meta"}, "Tap Update all to get the list of reports."));
   let have = 0;
   for (const [kind, title] of [["styra", "Styra"], ["kobo", "Kobo"]]) {
-    const list = reps.filter(r => r.kind === kind); if (!list.length) continue;
+    const list = reps.filter(r => r.kind === kind).sort(reportCmp); if (!list.length) continue;
     box.append(el("h2", {}, title));
     for (const r of list) { if (lib[r.id]) have++; box.append(card(r)); }
   }
@@ -3743,6 +3751,7 @@ function siteStart(){
   $("header h1").textContent = "BIM Search";
   $("header .sub").firstChild.textContent = "Site search · ";
   $("#btnDownloadAll").textContent = "Update all";
+  $("#sExact").checked = true;                       // exact match is the normal search here (untick for close values)
   $("#btnDownloadAll").onclick = () => siteUpdate();
   $("#gBtn").onclick = siteLogin;
   $("#gPass").onkeydown = e => { if (e.key === "Enter") siteLogin(); };
